@@ -1,55 +1,74 @@
 # Análisis forense estático de scripts
 
-Herramienta de línea de comandos y reglas heurísticas de ejemplo para revisar scripts Python, Bash/wget y Ruby. El análisis es estático: **los archivos inspeccionados no se ejecutan**. Una coincidencia no demuestra por sí sola que un archivo sea malicioso.
+Herramienta de línea de comandos y reglas heurísticas para revisar scripts Python, Bash/wget y Ruby. El análisis es estático: **los archivos inspeccionados no se ejecutan**. Una coincidencia no demuestra por sí sola que un archivo sea malicioso.
 
 ## Archivos
 
-- `extract_metadata.py`: analizador principal; extrae metadatos, hashes, entropía y análisis estático de formatos admitidos.
-- `extract_metadata_termux.py`: asistente interactivo para Termux, con explorador de rutas y selector Android.
-- `examples/advanced_script_rules.json`: reglas avanzadas para Python, Bash/wget y Ruby.
+- `extract_metadata.py`: analizador principal de metadatos y formatos.
+- `extract_metadata_termux.py`: asistente con explorador de rutas, selector Android y configuración de almacenamiento.
+- `review_termux.sh`: revisión rápida desde la terminal; sin argumentos abre el asistente y con rutas lanza el análisis.
+- `install_exiftool_termux.sh`: instala/verifica ExifTool usando los repositorios de Termux.
+- `examples/advanced_script_rules.json`: reglas para Python, Bash/wget y Ruby.
 
-## Uso del analizador
+## Instalación y uso en Termux
+
+Instala Python y, si deseas usar el selector SAF de Android, Termux:API. La aplicación Termux:API debe proceder de la misma fuente/firma que Termux.
+
+```bash
+pkg install python termux-api
+bash install_exiftool_termux.sh
+```
+
+El instalador actualiza los índices (`pkg update`) e instala el paquete `exiftool` con `pkg install -y exiftool`. Termux mantiene un paquete propio que depende de Perl; por eso el instalador no descarga binarios genéricos ni usa `sudo` o CPAN [1]. La gestión de paquetes se realiza con `pkg`/APT en el prefijo de Termux [2].
+
+Para iniciar el asistente:
+
+```bash
+python extract_metadata_termux.py
+# O el wrapper de revisión:
+bash review_termux.sh
+```
+
+El asistente tiene una opción para instalar/verificar ExifTool. También admite el selector `termux-storage-get`, exploración de carpetas accesibles, rutas manuales y `termux-setup-storage`. Este último prepara accesos bajo `~/storage/` y puede mostrar un diálogo de permisos Android; la decisión del permiso se toma en el dispositivo. La exploración recursiva no sigue enlaces de directorio y está limitada a 8 niveles y 5.000 archivos; se muestran como máximo 200 entradas y se pueden revisar hasta 200 por ejecución.
+
+## Revisión desde la terminal
+
+Pasa archivos o carpetas al wrapper; este invoca `extract_metadata.py` en modo forense. Si ExifTool no está en `PATH`, informa cómo instalarlo y continúa omitiendo metadata incrustada:
+
+```bash
+bash review_termux.sh ~/storage/shared/Download/foto.jpg
+bash review_termux.sh --json --rules examples/advanced_script_rules.json ~/storage/shared/Download/script.py
+bash review_termux.sh -r -o informe.json ~/storage/shared/Download
+```
+
+Sin argumentos, `review_termux.sh` abre el asistente guiado. ExifTool sirve para leer/escribir metadata en muchos formatos y se distribuye como herramienta Perl; el paquete de Termux integra esa dependencia [1] [3].
+
+## Reglas personalizadas
 
 ```bash
 python extract_metadata.py --rules examples/advanced_script_rules.json archivo.py
 python extract_metadata.py --rules examples/advanced_script_rules.json instalador.sh modulo.rb --json
-python extract_metadata.py -r ./fuentes --rules examples/advanced_script_rules.json --json -o informe.json
 ```
 
-`--rules` activa el análisis forense. Las reglas admiten `id`, `description`, `severity`, `extensions`, `flags` (`i`/`m`) y `pattern` (expresión regular de Python). Se permiten hasta 100 reglas de hasta 400 caracteres cada una. Algunas formas de repetición anidada se rechazan para evitar expresiones de coste excesivo.
+`--rules` activa el análisis forense. Las reglas admiten `id`, `description`, `severity`, `extensions`, `flags` (`i`/`m`) y `pattern` (regex de Python). El analizador acepta hasta 100 reglas de hasta 400 caracteres. Algunas formas de repetición anidada se rechazan para evitar expresiones de coste excesivo.
 
-## Asistente y almacenamiento en Termux
+## Herramientas que se pueden integrar
 
-Instala Python y los comandos Termux:API; instala también la aplicación Termux:API desde la misma fuente/firma que Termux:
+- `file` para identificar formatos por firma y no solo por extensión.
+- `binutils` (`readelf`, `strings`) para cabeceras/dependencias ELF y cadenas.
+- **YARA** para reglas locales de patrones sobre archivos y muestras.
+- **ClamAV** para comparar con firmas antivirus; requiere considerar el tamaño de sus bases de datos y actualizaciones.
+- **Androguard** para análisis estático de APK/DEX.
+- **binwalk** para identificar estructuras y componentes en firmware.
 
-```bash
-pkg install python termux-api
-python extract_metadata_termux.py
-```
+Son candidatos para futuras integraciones, no dependencias de esta versión. Antes de añadir cada uno habría que verificar disponibilidad y mantenimiento en los repositorios Termux actuales, consumo de almacenamiento y límites de análisis. Las herramientas externas se ejecutarían de forma opcional y sin ejecutar la muestra analizada.
 
-El menú ofrece:
+## Alcance y limitaciones
 
-1. `termux-storage-get`: elegir un archivo con el selector de Android; puedes repetir la selección.
-2. **Explorar archivos disponibles en la terminal**: elegir una carpeta accesible, buscar de forma inmediata o recursiva, filtrar por extensión/nombre y seleccionar entradas por número.
-3. Introducir rutas manualmente.
-4. Ejecutar `termux-setup-storage` y después explorar el almacenamiento compartido.
+Las reglas se evalúan línea por línea; no reconstruyen flujos entre varias líneas ni detectan toda ofuscación. Una regla puede dar falsos positivos, y no encontrar coincidencias no certifica que un archivo sea seguro. Revisa el contexto, URLs, permisos, destinos y origen antes de concluir.
 
-`termux-setup-storage` prepara los accesos bajo `~/storage/` y puede mostrar un diálogo de permisos de Android. Revísalo y concede el permiso desde el dispositivo si quieres acceder al almacenamiento compartido. Después, el explorador incluye ubicaciones disponibles como `~/storage/shared`, `~/storage/downloads`, DCIM, imágenes, vídeos y música. No hay un comando genérico llamado `termux-storage` para conceder el permiso: el comando de configuración es `termux-setup-storage`, y `termux-storage-get` es el selector individual de Termux:API.
+## Referencias
 
-La exploración recursiva no sigue enlaces de directorio, está limitada a 8 niveles y 5.000 archivos por búsqueda; muestra como máximo 200 entradas y permite analizar hasta 200 archivos por ejecución. Usa un filtro como `.py,.sh` o un fragmento del nombre para acotar resultados grandes. El dispositivo y Android siguen determinando qué rutas son legibles.
-
-Al iniciar el análisis, puedes proporcionar un JSON de reglas, decidir si intentar leer metadata incrustada con ExifTool y guardar el informe JSON en una ruta elegida. Los archivos elegidos con el selector se copian a una carpeta temporal y se eliminan al terminar.
-
-## Cobertura de las reglas
-
-- **Python:** `eval`/`exec` de datos decodificados o descomprimidos, compilación en modo `exec`, `subprocess` con `shell=True`, solicitudes HTTP salientes y acceso a posibles almacenes locales de credenciales/cookies.
-- **Bash/wget:** descarga canalizada a intérpretes, escrituras a directorios temporales, opciones POST, indicadores de conexión inversa y persistencia.
-- **Ruby:** evaluación dinámica de contenido decodificado, lanzamiento de procesos y llamadas de red.
-
-Las expresiones personalizadas se aplican línea por línea. No reconstruyen flujos de datos entre varias líneas ni detectan todas las formas de ofuscación. Los patrones de descarga y ejecución pueden ser legítimos en instaladores y scripts de administración. Revisa URL, argumentos, permisos, destino, origen y contexto antes de concluir.
-
-## Fuentes de Termux/Android
-
-- [Termux:API](https://github.com/termux/termux-api)
-- [`termux-storage-get`](https://wiki.termux.com/wiki/Termux-storage-get)
-- [`termux-setup-storage`](https://wiki.termux.com/wiki/Termux-setup-storage)
+[1]: https://github.com/termux/termux-packages/blob/master/packages/exiftool/build.sh "Definición oficial del paquete ExifTool de Termux"
+[2]: https://github.com/termux/termux-packages/wiki/Package-Management "Gestión de paquetes de Termux"
+[3]: https://exiftool.org/install.html "Instalación oficial de ExifTool"

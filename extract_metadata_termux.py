@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 CORE = Path(__file__).with_name("extract_metadata.py")
+EXIFTOOL_INSTALLER = Path(__file__).with_name("install_exiftool_termux.sh")
 MAX_SCAN_FILES = 5000
 MAX_DEPTH = 8
 MAX_VISIBLE_FILES = 200
@@ -270,6 +271,22 @@ def choose_by_path() -> list[Path]:
     return selected
 
 
+def run_exiftool_installer() -> bool:
+    if not EXIFTOOL_INSTALLER.is_file():
+        print(f"No se encuentra el instalador: {EXIFTOOL_INSTALLER}")
+        return False
+    bash = shutil.which("bash")
+    if not bash:
+        print("No se encuentra bash; instala el paquete Termux correspondiente e inténtalo otra vez.")
+        return False
+    try:
+        result = subprocess.run([bash, str(EXIFTOOL_INSTALLER)], check=False)
+    except OSError as exc:
+        print(f"No se pudo iniciar el instalador: {exc}")
+        return False
+    return result.returncode == 0
+
+
 def main() -> int:
     if not CORE.is_file():
         print(f"Falta el analizador principal: {CORE}")
@@ -278,14 +295,22 @@ def main() -> int:
 
     print("=== Análisis forense estático guiado para Termux ===")
     print("Los archivos se inspeccionan; no se ejecutan.")
-    print("1) Seleccionar archivo(s) con el selector Android (termux-storage-get)")
-    print("2) Explorar archivos/carpetas accesibles desde la terminal")
-    print("3) Escribir ruta(s) manualmente")
-    print("4) Ejecutar termux-setup-storage y explorar almacenamiento compartido")
-    mode = ask("Elige 1-4 [2]: ") or "2"
-    if mode not in ("1", "2", "3", "4"):
-        print("Opción no válida.")
-        return 2
+    while True:
+        print("1) Seleccionar archivo(s) con el selector Android (termux-storage-get)")
+        print("2) Explorar archivos/carpetas accesibles desde la terminal")
+        print("3) Escribir ruta(s) manualmente")
+        print("4) Ejecutar termux-setup-storage y explorar almacenamiento compartido")
+        print("5) Instalar/verificar ExifTool con el paquete oficial de Termux")
+        mode = ask("Elige 1-5 [2]: ") or "2"
+        if mode == "5":
+            if not run_exiftool_installer():
+                return 1
+            print("ExifTool está listo. Elige ahora cómo seleccionar los archivos.")
+            continue
+        if mode not in ("1", "2", "3", "4"):
+            print("Opción no válida.")
+            return 2
+        break
     if mode == "4":
         setup_shared_storage()
         mode = "2"
