@@ -41,6 +41,8 @@ bash review_termux.sh --json --rules examples/advanced_script_rules.json ~/stora
 bash review_termux.sh -r -o informe.json ~/storage/shared/Download
 ```
 
+El asistente y el wrapper muestran barras de avance por fase y un indicador durante la lectura de metadata con ExifTool. El progreso va por `stderr`, así que la salida JSON permanece válida.
+
 Sin argumentos, `review_termux.sh` abre el asistente guiado. ExifTool sirve para leer/escribir metadata en muchos formatos y se distribuye como herramienta Perl; el paquete de Termux integra esa dependencia [1] [3].
 
 ## Reglas personalizadas

@@ -16,6 +16,7 @@ import stat
 import struct
 import subprocess
 import sys
+import time
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -93,6 +94,19 @@ def _run_tool(command: list[str], timeout: int = 12, limit: int = 16000) -> str 
         return text[:limit] if text else None
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def _progress_bar(stage: str, current: int, total: int, detail: str = "") -> None:
+    if total <= 0:
+        return
+    width = 24
+    fraction = min(1.0, max(0.0, current / total))
+    filled = int(width * fraction)
+    percent = int(fraction * 100)
+    suffix = f" {detail[:48]}" if detail else ""
+    line = f"\r{stage:<20} [{'#' * filled}{'-' * (width - filled)}] {current}/{total} {percent:3d}%{suffix}"
+    sys.stderr.write(line + ("\n" if current >= total else ""))
+    sys.stderr.flush()
 
 
 def _file_identification(path: Path) -> str | None:
@@ -523,17 +537,40 @@ def collect_files(inputs: list[str], recursive: bool) -> tuple[list[Path], list[
     return files, errors
 
 
-def extract_embedded(files: list[Path]) -> tuple[dict[str, dict[str, Any]], str | None]:
+def extract_embedded(files: list[Path], progress: bool = False) -> tuple[dict[str, dict[str, Any]], str | None]:
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return {}, "ExifTool no está instalado; solo se extrajeron metadatos básicos del sistema de archivos."
     if not files:
         return {}, None
+    command = [exiftool, "-json", "-a", "-G1", "-s", "--", *[str(p) for p in files]]
     try:
-        result = subprocess.run(
-            [exiftool, "-json", "-a", "-G1", "-s", "--", *[str(p) for p in files]],
-            check=False, capture_output=True, text=True, timeout=180,
-        )
+        if not progress:
+            result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=180)
+        else:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            started = time.monotonic()
+            frame = 0
+            frames = "|/-\\"
+            sys.stderr.write(f"\rExifTool: metadata incrustada de {len(files)} archivo(s)...")
+            sys.stderr.flush()
+            while True:
+                elapsed = time.monotonic() - started
+                remaining = 180 - elapsed
+                if remaining <= 0:
+                    process.kill()
+                    process.communicate()
+                    raise subprocess.TimeoutExpired(command, 180)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.35, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    sys.stderr.write(f"\rExifTool: procesando [{frames[frame % len(frames)]}] {int(elapsed)} s")
+                    sys.stderr.flush()
+                    frame += 1
+            sys.stderr.write("\rExifTool: completado".ljust(60) + "\n")
+            sys.stderr.flush()
+            result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         if result.returncode not in (0, 1):
             detail = result.stderr.strip() or f"código de salida {result.returncode}"
             return {}, f"ExifTool terminó con un aviso: {detail}"
@@ -546,6 +583,8 @@ def extract_embedded(files: list[Path]) -> tuple[dict[str, dict[str, Any]], str 
         warning = result.stderr.strip() or None
         return metadata, (f"Aviso de ExifTool: {warning}" if warning else None)
     except subprocess.TimeoutExpired:
+        if progress:
+            sys.stderr.write("\rExifTool: tiempo límite alcanzado".ljust(60) + "\n")
         return {}, "ExifTool excedió el límite de tiempo de 180 segundos."
     except (OSError, json.JSONDecodeError) as exc:
         return {}, f"No se pudieron leer metadatos incrustados con ExifTool: {exc}"
@@ -588,6 +627,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Imprimir el resultado en JSON")
     parser.add_argument("-o", "--output", metavar="ARCHIVO", help="Guardar el resultado en un archivo (por defecto stdout)")
     parser.add_argument("--sin-incrustados", action="store_true", help="No ejecutar ExifTool aunque esté instalado")
+    parser.add_argument("--progress", action="store_true", help="Mostrar avance por fase en stderr; la salida JSON permanece limpia")
     parser.add_argument("--forense", action="store_true", help="Añadir hashes, entropía y análisis estático de JAR/ZIP, ELF/.so, PE (.exe/.dll), .rc y scripts (.py/.sh/.ps1/.bat)")
     parser.add_argument("--rules", metavar="JSON", help="Cargar reglas heurísticas personalizadas desde un JSON (activa --forense)")
     args = parser.parse_args()
@@ -598,26 +638,30 @@ def main() -> int:
     if args.rules:
         args.forense = True
     records: list[dict[str, Any]] = []
-    for path in files:
+    for index, path in enumerate(files, 1):
         try:
             records.append({"metadatos_basicos": basic_metadata(path), "metadatos_incrustados": {}})
         except OSError as exc:
             errors.append(f"No se pudieron leer los metadatos de {path}: {exc}")
+        if args.progress:
+            _progress_bar("Metadatos básicos", index, len(files), path.name)
 
     embedded: dict[str, dict[str, Any]] = {}
     warning: str | None = None
     if not args.sin_incrustados:
-        embedded, warning = extract_embedded(files)
+        embedded, warning = extract_embedded(files, progress=args.progress)
         for record in records:
             full_path = record["metadatos_basicos"]["archivo"]
             record["metadatos_incrustados"] = embedded.get(full_path, {})
 
     if args.forense:
-        for path, record in zip(files, records):
+        for index, (path, record) in enumerate(zip(files, records), 1):
             try:
                 record["analisis_forense"] = forensic_analysis(path, custom_rules)
             except (OSError, PermissionError) as exc:
                 errors.append(f"No se pudo analizar forensemente {path}: {exc}")
+            if args.progress:
+                _progress_bar("Análisis forense", index, len(records), path.name)
 
     if args.json:
         output = json.dumps({"archivos": records, "aviso": warning, "errores": errors}, ensure_ascii=False, indent=2)
@@ -635,6 +679,8 @@ def main() -> int:
             return 2
     else:
         print(output)
+    if args.progress:
+        print(f"Revisión completada: {len(records)} archivo(s), {len(errors)} error(es).", file=sys.stderr)
     return 1 if errors else 0
 
 

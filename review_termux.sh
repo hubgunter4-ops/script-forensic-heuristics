@@ -24,7 +24,7 @@ if [[ $# -eq 0 ]]; then
   exec "$PYTHON" "$GUIDED"
 fi
 
-args=(--forense)
+args=(--forense --progress)
 if ! command -v exiftool >/dev/null 2>&1; then
   echo "Aviso: ExifTool no está instalado; se omitirán metadatos incrustados." >&2
   echo "Para instalarlo desde Termux: bash '$SCRIPT_DIR/install_exiftool_termux.sh'" >&2

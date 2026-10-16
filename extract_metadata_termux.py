@@ -336,7 +336,10 @@ def main() -> int:
 
         report_path = ask("Ruta opcional para guardar el informe JSON (Enter para mostrarlo aquí): ")
         embedded = yes(ask("¿Intentar leer metadatos incrustados con ExifTool, si está instalado? [s/N]: "))
-        command = [sys.executable, str(CORE), "--forense", "--json"]
+        if embedded and not shutil.which("exiftool"):
+            print("ExifTool no está instalado. Puedes elegir la opción 5 del menú o ejecutar install_exiftool_termux.sh.")
+        print(f"Iniciando revisión de {len(files)} archivo(s); el avance aparecerá debajo.")
+        command = [sys.executable, str(CORE), "--forense", "--json", "--progress"]
         if not embedded:
             command.append("--sin-incrustados")
         if rules_path:
@@ -348,9 +351,8 @@ def main() -> int:
                 return 2
             command.extend(["--output", str(destination)])
         command.extend(str(path) for path in files)
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-        if result.stderr:
-            print(result.stderr, file=sys.stderr, end="")
+        # stderr se hereda para que las barras y el spinner se vean en tiempo real.
+        result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=False)
         if report_path:
             print(f"Informe guardado en: {Path(report_path).expanduser()}")
             return result.returncode
