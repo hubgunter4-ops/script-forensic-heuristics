@@ -8,7 +8,9 @@ Herramienta de línea de comandos y reglas heurísticas para revisar scripts Pyt
 - `extract_metadata_termux.py`: asistente con explorador de rutas, selector Android y configuración de almacenamiento.
 - `review_termux.sh`: revisión rápida desde la terminal; sin argumentos abre el asistente y con rutas lanza el análisis.
 - `install_exiftool_termux.sh`: instala/verifica ExifTool usando los repositorios de Termux.
+- `install_yara_termux.sh`: instala/verifica YARA desde Termux.
 - `examples/advanced_script_rules.json`: reglas para Python, Bash/wget y Ruby.
+- `examples/advanced_static_triage.yar`: reglas YARA adjuntas; se aplican por defecto en modo forense.
 
 ## Instalación y uso en Termux
 
@@ -17,9 +19,12 @@ Instala Python y, si deseas usar el selector SAF de Android, Termux:API. La apli
 ```bash
 pkg install python termux-api
 bash install_exiftool_termux.sh
+bash install_yara_termux.sh
 ```
 
 El instalador actualiza los índices (`pkg update`) e instala el paquete `exiftool` con `pkg install -y exiftool`. Termux mantiene un paquete propio que depende de Perl; por eso el instalador no descarga binarios genéricos ni usa `sudo` o CPAN [1]. La gestión de paquetes se realiza con `pkg`/APT en el prefijo de Termux [2].
+
+YARA es un paquete de los repositorios oficiales de Termux [4]. El escaneo usa por defecto `examples/advanced_static_triage.yar` cuando está activado el modo forense y el comando `yara` está instalado. El asistente tiene la opción 6 para instalarlo; desde la terminal también puedes ejecutar `bash install_yara_termux.sh`. YARA recibe cada archivo como dato y compara las reglas; no ejecuta la muestra. Si no está instalado, el resto del análisis continúa y el informe indica que el escaneo no estuvo disponible. La invocación del motor sigue la forma documentada `yara REGLAS ARCHIVO` [5].
 
 Para iniciar el asistente:
 
@@ -29,7 +34,7 @@ python extract_metadata_termux.py
 bash review_termux.sh
 ```
 
-El asistente tiene una opción para instalar/verificar ExifTool. También admite el selector `termux-storage-get`, exploración de carpetas accesibles, rutas manuales y `termux-setup-storage`. Este último prepara accesos bajo `~/storage/` y puede mostrar un diálogo de permisos Android; la decisión del permiso se toma en el dispositivo. La exploración recursiva no sigue enlaces de directorio y está limitada a 8 niveles y 5.000 archivos; se muestran como máximo 200 entradas y se pueden revisar hasta 200 por ejecución.
+El asistente tiene opciones para instalar/verificar ExifTool y YARA. También admite el selector `termux-storage-get`, exploración de carpetas accesibles, rutas manuales y `termux-setup-storage`. Este último prepara accesos bajo `~/storage/` y puede mostrar un diálogo de permisos Android; la decisión del permiso se toma en el dispositivo. La exploración recursiva no sigue enlaces de directorio y está limitada a 8 niveles y 5.000 archivos; se muestran como máximo 200 entradas y se pueden revisar hasta 200 por ejecución.
 
 Al terminar la selección, el asistente permite guardar el informe en **JSON, HTML, PDF o texto**. Si aceptas la ruta sugerida, los archivos se guardan en el directorio actual con un nombre `informe_forense_...`.
 
@@ -44,11 +49,16 @@ bash review_termux.sh -r -o informe.json ~/storage/shared/Download
 bash review_termux.sh --format html -o informe.html ~/storage/shared/Download/foto.jpg
 bash review_termux.sh --format pdf -o informe.pdf ~/storage/shared/Download/foto.jpg
 python extract_metadata.py --forense --format pdf -o informe.pdf muestra.exe
+python extract_metadata.py --forense --no-yara muestra.exe
+python extract_metadata.py --forense --yara-rules reglas_personalizadas.yar muestra.exe
+python extract_metadata.py --forense --progress --color always muestra.exe
 ```
 
-Los formatos de CLI son `text`, `json`, `html` y `pdf`; `--json` sigue disponible como alias de compatibilidad. PDF requiere `-o/--output`. HTML es un archivo autocontenido. El generador PDF usa solo Python estándar, sin instalar conversores; los caracteres que no pertenezcan a Windows-1252 pueden aparecer como `?` en ese formato. El asistente y el wrapper muestran barras de avance por fase y un indicador durante la lectura de metadata con ExifTool; el progreso va por `stderr`, así que la salida JSON permanece válida.
+Los formatos de CLI son `text`, `json`, `html` y `pdf`; `--json` sigue disponible como alias de compatibilidad. PDF requiere `-o/--output`. HTML es un archivo autocontenido. El generador PDF usa solo Python estándar, sin instalar conversores; los caracteres que no pertenezcan a Windows-1252 pueden aparecer como `?` en ese formato.
 
-Sin argumentos, `review_termux.sh` abre el asistente guiado. ExifTool sirve para leer/escribir metadata en muchos formatos y se distribuye como herramienta Perl; el paquete de Termux integra esa dependencia [1] [3].
+La interfaz añade banner, prompts y progreso coloreados, más un spinner durante ExifTool. `--color auto` solo usa ANSI en una terminal compatible; `--color always` y `--color never` permiten forzarlo o apagarlo. `NO_COLOR=1` deshabilita el color automático. Las exportaciones JSON, HTML y PDF no reciben secuencias ANSI; los informes HTML/PDF conservan sus propios estilos.
+
+Sin argumentos, `review_termux.sh` abre el asistente guiado. ExifTool sirve para leer/escribir metadata en muchos formatos y se distribuye como herramienta Perl; el paquete de Termux integra esa dependencia [1] [3]. Las reglas YARA son heurísticas: una coincidencia solo señala contenido que conviene revisar. En particular, las reglas ZIP/JAR inspeccionan los bytes del archivo y **no descomprimen sus miembros**.
 
 ## Reglas personalizadas
 
@@ -63,7 +73,6 @@ python extract_metadata.py --rules examples/advanced_script_rules.json instalado
 
 - `file` para identificar formatos por firma y no solo por extensión.
 - `binutils` (`readelf`, `strings`) para cabeceras/dependencias ELF y cadenas.
-- **YARA** para reglas locales de patrones sobre archivos y muestras.
 - **ClamAV** para comparar con firmas antivirus; requiere considerar el tamaño de sus bases de datos y actualizaciones.
 - **Androguard** para análisis estático de APK/DEX.
 - **binwalk** para identificar estructuras y componentes en firmware.
@@ -79,3 +88,5 @@ Las reglas se evalúan línea por línea; no reconstruyen flujos entre varias l�
 [1]: https://github.com/termux/termux-packages/blob/master/packages/exiftool/build.sh "Definición oficial del paquete ExifTool de Termux"
 [2]: https://github.com/termux/termux-packages/wiki/Package-Management "Gestión de paquetes de Termux"
 [3]: https://exiftool.org/install.html "Instalación oficial de ExifTool"
+[4]: https://raw.githubusercontent.com/termux/termux-packages/master/packages/yara/build.sh "Definición oficial del paquete YARA de Termux"
+[5]: https://yara.readthedocs.io/en/stable/commandline.html "Uso oficial de YARA desde la línea de comandos"

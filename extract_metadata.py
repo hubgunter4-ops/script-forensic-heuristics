@@ -24,6 +24,24 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+DEFAULT_YARA_RULES = Path(__file__).with_name("examples") / "advanced_static_triage.yar"
+
+
+def _color_enabled(mode: str, stream: Any) -> bool:
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb" and bool(getattr(stream, "isatty", lambda: False)())
+
+
+def _paint(text: str, code: str, enabled: bool) -> str:
+    return f"\033[{code}m{text}\033[0m" if enabled else text
+
+
+def _terminal_safe(text: str) -> str:
+    return "".join(char if char.isprintable() or char in "\n\t" else "�" for char in text)
+
 
 def iso_timestamp(timestamp: float) -> str:
     return dt.datetime.fromtimestamp(timestamp, tz=dt.timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -98,17 +116,66 @@ def _run_tool(command: list[str], timeout: int = 12, limit: int = 16000) -> str 
         return None
 
 
-def _progress_bar(stage: str, current: int, total: int, detail: str = "") -> None:
+def _progress_bar(stage: str, current: int, total: int, detail: str = "", color: bool = False) -> None:
     if total <= 0:
         return
     width = 24
     fraction = min(1.0, max(0.0, current / total))
     filled = int(width * fraction)
     percent = int(fraction * 100)
-    suffix = f" {detail[:48]}" if detail else ""
-    line = f"\r{stage:<20} [{'#' * filled}{'-' * (width - filled)}] {current}/{total} {percent:3d}%{suffix}"
+    suffix = f" {_terminal_safe(detail)[:48]}" if detail else ""
+    stage_label = _paint(stage.ljust(20), "1;36", color)
+    bar = _paint("#" * filled, "1;32", color) + _paint("-" * (width - filled), "90", color)
+    percent_label = _paint(f"{percent:3d}%", "1;32" if percent == 100 else "33", color)
+    line = f"\r{stage_label} [{bar}] {current}/{total} {percent_label}{suffix}"
     sys.stderr.write(line + ("\n" if current >= total else ""))
     sys.stderr.flush()
+
+
+def scan_yara(
+    files: list[Path], rules_path: Path, progress: bool = False, color: bool = False,
+) -> tuple[dict[str, list[str]], dict[str, str], str | None, bool]:
+    yara_bin = shutil.which("yara")
+    if not yara_bin:
+        return {}, {}, "YARA no está instalado; se omitió el conjunto predeterminado (en Termux puedes elegir Instalar YARA).", False
+    if not rules_path.is_file():
+        return {}, {}, f"No se encuentra el archivo de reglas YARA: {rules_path}", False
+
+    matches: dict[str, list[str]] = {}
+    file_errors: dict[str, str] = {}
+    warnings: list[str] = []
+    for index, path in enumerate(files, 1):
+        key = str(path.resolve())
+        try:
+            result = subprocess.run(
+                [yara_bin, str(rules_path.resolve()), key],
+                check=False, capture_output=True, text=True, errors="replace", timeout=30,
+            )
+            if result.returncode == 0:
+                matches[key] = [line.split(maxsplit=1)[0] for line in result.stdout.splitlines() if line.strip()]
+                if result.stderr.strip():
+                    warnings.append(f"{path.name}: {result.stderr.strip()[:300]}")
+            else:
+                detail = result.stderr.strip() or f"código de salida {result.returncode}"
+                file_errors[key] = detail[:500]
+                warnings.append(f"{path.name}: {detail[:300]}")
+        except subprocess.TimeoutExpired:
+            detail = "YARA excedió el límite de 30 segundos para este archivo."
+            file_errors[key] = detail
+            warnings.append(f"{path.name}: {detail}")
+        except OSError as exc:
+            file_errors[key] = str(exc)
+            warnings.append(f"{path.name}: {exc}")
+        if progress:
+            _progress_bar("Escaneo YARA", index, len(files), path.name, color)
+
+    warning = None
+    if warnings:
+        shown = warnings[:8]
+        if len(warnings) > len(shown):
+            shown.append(f"y {len(warnings) - len(shown)} advertencia(s) adicional(es)")
+        warning = "Aviso de YARA: " + " | ".join(shown)
+    return matches, file_errors, warning, True
 
 
 def _file_identification(path: Path) -> str | None:
@@ -539,7 +606,7 @@ def collect_files(inputs: list[str], recursive: bool) -> tuple[list[Path], list[
     return files, errors
 
 
-def extract_embedded(files: list[Path], progress: bool = False) -> tuple[dict[str, dict[str, Any]], str | None]:
+def extract_embedded(files: list[Path], progress: bool = False, color: bool = False) -> tuple[dict[str, dict[str, Any]], str | None]:
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return {}, "ExifTool no está instalado; solo se extrajeron metadatos básicos del sistema de archivos."
@@ -554,7 +621,7 @@ def extract_embedded(files: list[Path], progress: bool = False) -> tuple[dict[st
             started = time.monotonic()
             frame = 0
             frames = "|/-\\"
-            sys.stderr.write(f"\rExifTool: metadata incrustada de {len(files)} archivo(s)...")
+            sys.stderr.write(_paint(f"\rExifTool: metadata incrustada de {len(files)} archivo(s)...", "1;36", color))
             sys.stderr.flush()
             while True:
                 elapsed = time.monotonic() - started
@@ -567,10 +634,11 @@ def extract_embedded(files: list[Path], progress: bool = False) -> tuple[dict[st
                     stdout, stderr = process.communicate(timeout=min(0.35, remaining))
                     break
                 except subprocess.TimeoutExpired:
-                    sys.stderr.write(f"\rExifTool: procesando [{frames[frame % len(frames)]}] {int(elapsed)} s")
+                    spinner = _paint(frames[frame % len(frames)], "1;35", color)
+                    sys.stderr.write(f"\rExifTool: procesando [{spinner}] {int(elapsed)} s")
                     sys.stderr.flush()
                     frame += 1
-            sys.stderr.write("\rExifTool: completado".ljust(60) + "\n")
+            sys.stderr.write(_paint("\rExifTool: completado".ljust(60), "1;32", color) + "\n")
             sys.stderr.flush()
             result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         if result.returncode not in (0, 1):
@@ -586,7 +654,7 @@ def extract_embedded(files: list[Path], progress: bool = False) -> tuple[dict[st
         return metadata, (f"Aviso de ExifTool: {warning}" if warning else None)
     except subprocess.TimeoutExpired:
         if progress:
-            sys.stderr.write("\rExifTool: tiempo límite alcanzado".ljust(60) + "\n")
+            sys.stderr.write(_paint("\rExifTool: tiempo límite alcanzado".ljust(60), "1;31", color) + "\n")
         return {}, "ExifTool excedió el límite de tiempo de 180 segundos."
     except (OSError, json.JSONDecodeError) as exc:
         return {}, f"No se pudieron leer metadatos incrustados con ExifTool: {exc}"
@@ -612,11 +680,35 @@ def render_text(records: list[dict[str, Any]], warning: str | None, errors: list
         if forensic:
             lines.append("  Análisis forense estático:")
             lines.extend("    " + line for line in json.dumps(forensic, ensure_ascii=False, indent=2).splitlines())
+        yara = record.get("analisis_yara")
+        if yara:
+            lines.append("  Análisis YARA:")
+            lines.extend("    " + line for line in json.dumps(yara, ensure_ascii=False, indent=2).splitlines())
     if warning:
         lines.extend(["", f"Aviso: {warning}"])
     if errors:
         lines.extend(["", "Errores:", *[f"  - {error}" for error in errors]])
     return "\n".join(lines)
+
+
+def colorize_text_report(text: str, enabled: bool) -> str:
+    styled: list[str] = []
+    for raw_line in text.splitlines():
+        line = _terminal_safe(raw_line)
+        stripped = line.strip()
+        if line.startswith("Archivo:"):
+            styled.append(_paint(line, "1;36", enabled))
+        elif stripped.startswith("Análisis forense") or stripped.startswith("Análisis YARA"):
+            styled.append(_paint(line, "1;35", enabled))
+        elif stripped.startswith("Aviso:"):
+            styled.append(_paint(line, "1;33", enabled))
+        elif stripped == "Errores:" or stripped.startswith("- "):
+            styled.append(_paint(line, "1;31", enabled))
+        elif stripped.startswith('"estado": "coincidencias"') or stripped.startswith('"coincidencias": ['):
+            styled.append(_paint(line, "1;32", enabled))
+        else:
+            styled.append(line)
+    return "\n".join(styled)
 
 
 def render_html(payload: dict[str, Any]) -> str:
@@ -652,6 +744,10 @@ def render_html(payload: dict[str, Any]) -> str:
         if forensic is not None:
             forensic_text = json.dumps(forensic, ensure_ascii=False, indent=2)
             parts.append(f"<details open><summary>Análisis forense estático</summary><pre>{html.escape(forensic_text)}</pre></details>")
+        yara = record.get("analisis_yara")
+        if yara is not None:
+            yara_text = json.dumps(yara, ensure_ascii=False, indent=2)
+            parts.append(f"<details open><summary>Coincidencias YARA</summary><pre>{html.escape(yara_text)}</pre></details>")
         parts.append("</section>")
     parts.append("</body></html>")
     return "\n".join(parts)
@@ -722,16 +818,23 @@ def main() -> int:
     parser.add_argument("--progress", action="store_true", help="Mostrar avance por fase en stderr; la salida JSON permanece limpia")
     parser.add_argument("--forense", action="store_true", help="Añadir hashes, entropía y análisis estático de JAR/ZIP, ELF/.so, PE (.exe/.dll), .rc y scripts (.py/.sh/.ps1/.bat)")
     parser.add_argument("--rules", metavar="JSON", help="Cargar reglas heurísticas personalizadas desde un JSON (activa --forense)")
+    parser.add_argument("--yara-rules", metavar="YAR", help=f"Usar reglas YARA distintas de las predeterminadas ({DEFAULT_YARA_RULES.name})")
+    parser.add_argument("--no-yara", action="store_true", help="Omitir el escaneo YARA predeterminado")
+    parser.add_argument("--color", choices=("auto", "always", "never"), default="auto", help="Colores ANSI en la terminal; auto respeta TTY y NO_COLOR")
     args = parser.parse_args()
     output_format = args.output_format or "text"
     if output_format == "pdf" and not args.output:
         parser.error("--format pdf requiere -o/--output para guardar el archivo PDF")
+    if args.no_yara and args.yara_rules:
+        parser.error("--no-yara no puede combinarse con --yara-rules")
 
     files, errors = collect_files(args.rutas, args.recursive)
     custom_rules, rule_errors = load_custom_rules(args.rules)
     errors.extend(rule_errors)
-    if args.rules:
+    if args.rules or args.yara_rules:
         args.forense = True
+    color_stderr = _color_enabled(args.color, sys.stderr)
+    color_stdout = _color_enabled(args.color, sys.stdout)
     records: list[dict[str, Any]] = []
     for index, path in enumerate(files, 1):
         try:
@@ -739,15 +842,28 @@ def main() -> int:
         except OSError as exc:
             errors.append(f"No se pudieron leer los metadatos de {path}: {exc}")
         if args.progress:
-            _progress_bar("Metadatos básicos", index, len(files), path.name)
+            _progress_bar("Metadatos básicos", index, len(files), path.name, color_stderr)
 
     embedded: dict[str, dict[str, Any]] = {}
-    warning: str | None = None
+    warning_parts: list[str] = []
     if not args.sin_incrustados:
-        embedded, warning = extract_embedded(files, progress=args.progress)
+        embedded, embedded_warning = extract_embedded(files, progress=args.progress, color=color_stderr)
+        if embedded_warning:
+            warning_parts.append(embedded_warning)
         for record in records:
             full_path = record["metadatos_basicos"]["archivo"]
             record["metadatos_incrustados"] = embedded.get(full_path, {})
+
+    yara_rules_path = Path(args.yara_rules).expanduser() if args.yara_rules else DEFAULT_YARA_RULES
+    yara_matches: dict[str, list[str]] = {}
+    yara_file_errors: dict[str, str] = {}
+    yara_available = False
+    if args.forense and not args.no_yara:
+        yara_matches, yara_file_errors, yara_warning, yara_available = scan_yara(
+            files, yara_rules_path, progress=args.progress, color=color_stderr,
+        )
+        if yara_warning:
+            warning_parts.append(yara_warning)
 
     if args.forense:
         for index, (path, record) in enumerate(zip(files, records), 1):
@@ -755,9 +871,26 @@ def main() -> int:
                 record["analisis_forense"] = forensic_analysis(path, custom_rules)
             except (OSError, PermissionError) as exc:
                 errors.append(f"No se pudo analizar forensemente {path}: {exc}")
+            path_key = str(path.resolve())
+            if args.no_yara:
+                record["analisis_yara"] = {"estado": "desactivado", "coincidencias": []}
+            elif not yara_available:
+                record["analisis_yara"] = {"estado": "no disponible", "reglas": str(yara_rules_path), "coincidencias": []}
+            elif path_key in yara_file_errors:
+                record["analisis_yara"] = {
+                    "estado": "error", "reglas": str(yara_rules_path),
+                    "coincidencias": [], "detalle": yara_file_errors[path_key],
+                }
+            else:
+                found = yara_matches.get(path_key, [])
+                record["analisis_yara"] = {
+                    "estado": "coincidencias" if found else "sin coincidencias",
+                    "reglas": str(yara_rules_path), "coincidencias": found,
+                }
             if args.progress:
-                _progress_bar("Análisis forense", index, len(records), path.name)
+                _progress_bar("Análisis forense", index, len(records), path.name, color_stderr)
 
+    warning = " | ".join(warning_parts) or None
     payload = {"archivos": records, "aviso": warning, "errores": errors}
     binary_output: bytes | None = None
     if output_format == "json":
@@ -771,6 +904,8 @@ def main() -> int:
         output = render_text(records, warning, errors)
         if not output:
             output = "No se encontraron archivos para procesar."
+        if not args.output:
+            output = colorize_text_report(output, color_stdout)
 
     if args.output:
         destination = Path(args.output).expanduser()
@@ -785,7 +920,8 @@ def main() -> int:
     else:
         print(output)
     if args.progress:
-        print(f"Revisión completada: {len(records)} archivo(s), {len(errors)} error(es).", file=sys.stderr)
+        summary = f"Revisión completada: {len(records)} archivo(s), {len(errors)} error(es)."
+        print(_paint(summary, "1;32" if not errors else "1;31", color_stderr), file=sys.stderr)
     return 1 if errors else 0
 
 

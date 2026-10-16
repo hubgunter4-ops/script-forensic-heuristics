@@ -17,15 +17,22 @@ from pathlib import Path
 
 CORE = Path(__file__).with_name("extract_metadata.py")
 EXIFTOOL_INSTALLER = Path(__file__).with_name("install_exiftool_termux.sh")
+YARA_INSTALLER = Path(__file__).with_name("install_yara_termux.sh")
 MAX_SCAN_FILES = 5000
 MAX_DEPTH = 8
 MAX_VISIBLE_FILES = 200
 MAX_SELECTED_FILES = 200
 
 
+def paint(text: str, code: str) -> str:
+    if not sys.stdout.isatty() or "NO_COLOR" in os.environ or os.environ.get("TERM") == "dumb":
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
 def ask(prompt: str) -> str:
     try:
-        return input(prompt).strip()
+        return input(paint(prompt, "1;36")).strip()
     except (EOFError, KeyboardInterrupt):
         print("\nCancelado.")
         raise SystemExit(130)
@@ -273,18 +280,28 @@ def choose_by_path() -> list[Path]:
 
 
 def run_exiftool_installer() -> bool:
-    if not EXIFTOOL_INSTALLER.is_file():
-        print(f"No se encuentra el instalador: {EXIFTOOL_INSTALLER}")
+    return run_tool_installer(EXIFTOOL_INSTALLER, "ExifTool")
+
+
+def run_yara_installer() -> bool:
+    return run_tool_installer(YARA_INSTALLER, "YARA")
+
+
+def run_tool_installer(installer: Path, label: str) -> bool:
+    if not installer.is_file():
+        print(paint(f"No se encuentra el instalador: {installer}", "1;31"))
         return False
     bash = shutil.which("bash")
     if not bash:
-        print("No se encuentra bash; instala el paquete Termux correspondiente e inténtalo otra vez.")
+        print(paint("No se encuentra bash; instala el paquete Termux correspondiente e inténtalo otra vez.", "1;31"))
         return False
     try:
-        result = subprocess.run([bash, str(EXIFTOOL_INSTALLER)], check=False)
+        result = subprocess.run([bash, str(installer)], check=False)
     except OSError as exc:
-        print(f"No se pudo iniciar el instalador: {exc}")
+        print(paint(f"No se pudo iniciar el instalador: {exc}", "1;31"))
         return False
+    if result.returncode == 0:
+        print(paint(f"{label} está listo.", "1;32"))
     return result.returncode == 0
 
 
@@ -294,19 +311,28 @@ def main() -> int:
         print("Coloca extract_metadata.py en la misma carpeta que este asistente.")
         return 2
 
-    print("=== Análisis forense estático guiado para Termux ===")
-    print("Los archivos se inspeccionan; no se ejecutan.")
+    print(paint("╭────────────────────────────────────╮", "1;36"))
+    print(paint("│  SCRIPT FORENSICS · TERMUX         │", "1;36"))
+    print(paint("│  Análisis estático · sin ejecución │", "1;36"))
+    print(paint("╰────────────────────────────────────╯", "1;36"))
+    print(paint("Los archivos se inspeccionan; no se ejecutan.", "90"))
     while True:
-        print("1) Seleccionar archivo(s) con el selector Android (termux-storage-get)")
-        print("2) Explorar archivos/carpetas accesibles desde la terminal")
-        print("3) Escribir ruta(s) manualmente")
-        print("4) Ejecutar termux-setup-storage y explorar almacenamiento compartido")
-        print("5) Instalar/verificar ExifTool con el paquete oficial de Termux")
-        mode = ask("Elige 1-5 [2]: ") or "2"
+        print(f"  {paint('1)', '1;32')} Seleccionar archivo(s) con el selector Android (termux-storage-get)")
+        print(f"  {paint('2)', '1;32')} Explorar archivos/carpetas accesibles desde la terminal")
+        print(f"  {paint('3)', '1;32')} Escribir ruta(s) manualmente")
+        print(f"  {paint('4)', '1;32')} Ejecutar termux-setup-storage y explorar almacenamiento compartido")
+        print(f"  {paint('5)', '1;32')} Instalar/verificar ExifTool")
+        print(f"  {paint('6)', '1;35')} Instalar/verificar YARA (reglas predeterminadas)")
+        mode = ask("Elige 1-6 [2]: ") or "2"
         if mode == "5":
             if not run_exiftool_installer():
                 return 1
             print("ExifTool está listo. Elige ahora cómo seleccionar los archivos.")
+            continue
+        if mode == "6":
+            if not run_yara_installer():
+                return 1
+            print("YARA está listo; sus reglas predeterminadas se aplicarán en el próximo análisis forense.")
             continue
         if mode not in ("1", "2", "3", "4"):
             print("Opción no válida.")
@@ -351,7 +377,9 @@ def main() -> int:
             return 2
         embedded = yes(ask("¿Intentar leer metadatos incrustados con ExifTool, si está instalado? [s/N]: "))
         if embedded and not shutil.which("exiftool"):
-            print("ExifTool no está instalado. Puedes elegir la opción 5 del menú o ejecutar install_exiftool_termux.sh.")
+            print(paint("ExifTool no está instalado. Puedes elegir la opción 5 del menú.", "1;33"))
+        if not shutil.which("yara"):
+            print(paint("YARA no está instalado; el informe lo indicará. Elige la opción 6 para instalarlo.", "1;33"))
         print(f"Iniciando revisión de {len(files)} archivo(s); el avance aparecerá debajo.")
         command = [sys.executable, str(CORE), "--forense", "--format", output_format, "--progress"]
         if not embedded:
@@ -363,9 +391,9 @@ def main() -> int:
         # stderr se hereda para que las barras y el spinner se vean en tiempo real.
         result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=False)
         if destination.is_file():
-            print(f"Informe {output_format.upper()} guardado en: {destination} ({destination.stat().st_size} bytes)")
+            print(paint(f"Informe {output_format.upper()} guardado en: {destination} ({destination.stat().st_size} bytes)", "1;32"))
         else:
-            print(f"No se generó el informe esperado: {destination}", file=sys.stderr)
+            print(paint(f"No se generó el informe esperado: {destination}", "1;31"), file=sys.stderr)
             if result.stdout:
                 print(result.stdout, end="")
             return result.returncode or 2
