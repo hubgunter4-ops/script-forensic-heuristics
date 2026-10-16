@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime as dt
+import html
 import hashlib
 import json
 import math
@@ -16,6 +17,7 @@ import stat
 import struct
 import subprocess
 import sys
+import textwrap
 import time
 import zipfile
 from collections import Counter
@@ -617,6 +619,95 @@ def render_text(records: list[dict[str, Any]], warning: str | None, errors: list
     return "\n".join(lines)
 
 
+def render_html(payload: dict[str, Any]) -> str:
+    generated = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    parts = [
+        "<!doctype html>",
+        '<html lang="es"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        "<title>Informe de revisión forense</title>",
+        "<style>body{font:16px system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#17202a;background:#f5f7fa}h1,h2{color:#16324f}header,.file{background:#fff;border:1px solid #d9e1ea;border-radius:10px;padding:1rem;margin:1rem 0}table{border-collapse:collapse;width:100%;overflow-wrap:anywhere}th,td{text-align:left;vertical-align:top;padding:.45rem;border-bottom:1px solid #e5e9ef}th{width:24%;color:#34495e}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f7;padding:1rem;border-radius:6px;font-size:.85rem}.notice{background:#fff3cd;padding:.75rem;border-left:4px solid #d39e00}details{margin:.8rem 0}summary{cursor:pointer;font-weight:600}</style>",
+        "</head><body>",
+        "<header><h1>Informe de metadatos y revisión forense</h1>",
+        f"<p>Generado: {html.escape(generated)} · Archivos: {len(payload.get('archivos', []))}</p></header>",
+    ]
+    if payload.get("aviso"):
+        parts.append(f'<p class="notice">Aviso: {html.escape(str(payload["aviso"]))}</p>')
+    if payload.get("errores"):
+        parts.append('<section class="file"><h2>Errores</h2><ul>')
+        parts.extend(f"<li>{html.escape(str(error))}</li>" for error in payload["errores"])
+        parts.append("</ul></section>")
+    for index, record in enumerate(payload.get("archivos", []), 1):
+        basic = record.get("metadatos_basicos", {})
+        filename = html.escape(str(basic.get("archivo", f"Archivo {index}")))
+        parts.append(f'<section class="file"><h2>{index}. {filename}</h2><table><tbody>')
+        for key, value in basic.items():
+            shown = json.dumps(value, ensure_ascii=False)
+            parts.append(f"<tr><th>{html.escape(str(key))}</th><td>{html.escape(shown)}</td></tr>")
+        parts.append("</tbody></table>")
+        embedded = record.get("metadatos_incrustados", {})
+        embedded_text = json.dumps(embedded, ensure_ascii=False, indent=2) if embedded else "No disponibles."
+        parts.append(f"<details><summary>Metadatos incrustados</summary><pre>{html.escape(embedded_text)}</pre></details>")
+        forensic = record.get("analisis_forense")
+        if forensic is not None:
+            forensic_text = json.dumps(forensic, ensure_ascii=False, indent=2)
+            parts.append(f"<details open><summary>Análisis forense estático</summary><pre>{html.escape(forensic_text)}</pre></details>")
+        parts.append("</section>")
+    parts.append("</body></html>")
+    return "\n".join(parts)
+
+
+def render_pdf(payload: dict[str, Any]) -> bytes:
+    generated = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    source = ["Informe de metadatos y revisión forense", f"Generado: {generated}", ""]
+    source.extend(render_text(payload.get("archivos", []), payload.get("aviso"), payload.get("errores", [])).splitlines())
+    lines: list[str] = []
+    for line in source:
+        leading = line[:len(line) - len(line.lstrip())]
+        body = line[len(leading):]
+        if not body:
+            lines.append("")
+            continue
+        lines.extend(textwrap.wrap(
+            body, width=max(48, 96 - len(leading)), initial_indent=leading,
+            subsequent_indent=leading + "  ", break_long_words=True,
+            break_on_hyphens=False, replace_whitespace=False,
+        ) or [leading])
+    page_lines = 56
+    pages = [lines[offset:offset + page_lines] for offset in range(0, len(lines), page_lines)] or [[]]
+    object_count = 3 + 2 * len(pages)
+    objects: dict[int, bytes] = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: f"<< /Type /Pages /Kids [{' '.join(f'{4 + 2 * i} 0 R' for i in range(len(pages)))}] /Count {len(pages)} >>".encode("ascii"),
+        3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    }
+    for page_index, page in enumerate(pages):
+        page_object = 4 + 2 * page_index
+        content_object = page_object + 1
+        commands = ["BT /F1 9 Tf 42 800 Td 12 TL"]
+        commands.extend(f"<{line.encode('cp1252', errors='replace').hex().upper()}> Tj T*" for line in page)
+        commands.extend([
+            "ET",
+            f"BT /F1 8 Tf 500 24 Td <{f'Pagina {page_index + 1}/{len(pages)}'.encode('cp1252').hex().upper()}> Tj ET",
+        ])
+        stream = ("\n".join(commands) + "\n").encode("ascii")
+        objects[page_object] = f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {content_object} 0 R >>".encode("ascii")
+        objects[content_object] = b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"endstream"
+
+    output = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for number in range(1, object_count + 1):
+        offsets.append(len(output))
+        output.extend(f"{number} 0 obj\n".encode("ascii"))
+        output.extend(objects[number])
+        output.extend(b"\nendobj\n")
+    xref_offset = len(output)
+    output.extend(f"xref\n0 {object_count + 1}\n0000000000 65535 f \n".encode("ascii"))
+    output.extend("".join(f"{offset:010d} 00000 n \n" for offset in offsets[1:]).encode("ascii"))
+    output.extend(f"trailer\n<< /Size {object_count + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii"))
+    return bytes(output)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Extrae metadatos y, opcionalmente, realiza análisis forense estático sin ejecutar archivos.",
@@ -624,13 +715,17 @@ def main() -> int:
     )
     parser.add_argument("rutas", nargs="+", help="Uno o más archivos o directorios")
     parser.add_argument("-r", "--recursive", action="store_true", help="Recorrer subdirectorios")
-    parser.add_argument("--json", action="store_true", help="Imprimir el resultado en JSON")
+    parser.add_argument("--json", dest="output_format", action="store_const", const="json", help="Imprimir/guardar el resultado en JSON (alias de --format json)")
+    parser.add_argument("--format", dest="output_format", choices=("text", "json", "html", "pdf"), default=None, help="Formato del informe (pdf requiere -o)")
     parser.add_argument("-o", "--output", metavar="ARCHIVO", help="Guardar el resultado en un archivo (por defecto stdout)")
     parser.add_argument("--sin-incrustados", action="store_true", help="No ejecutar ExifTool aunque esté instalado")
     parser.add_argument("--progress", action="store_true", help="Mostrar avance por fase en stderr; la salida JSON permanece limpia")
     parser.add_argument("--forense", action="store_true", help="Añadir hashes, entropía y análisis estático de JAR/ZIP, ELF/.so, PE (.exe/.dll), .rc y scripts (.py/.sh/.ps1/.bat)")
     parser.add_argument("--rules", metavar="JSON", help="Cargar reglas heurísticas personalizadas desde un JSON (activa --forense)")
     args = parser.parse_args()
+    output_format = args.output_format or "text"
+    if output_format == "pdf" and not args.output:
+        parser.error("--format pdf requiere -o/--output para guardar el archivo PDF")
 
     files, errors = collect_files(args.rutas, args.recursive)
     custom_rules, rule_errors = load_custom_rules(args.rules)
@@ -663,8 +758,15 @@ def main() -> int:
             if args.progress:
                 _progress_bar("Análisis forense", index, len(records), path.name)
 
-    if args.json:
-        output = json.dumps({"archivos": records, "aviso": warning, "errores": errors}, ensure_ascii=False, indent=2)
+    payload = {"archivos": records, "aviso": warning, "errores": errors}
+    binary_output: bytes | None = None
+    if output_format == "json":
+        output = json.dumps(payload, ensure_ascii=False, indent=2)
+    elif output_format == "html":
+        output = render_html(payload)
+    elif output_format == "pdf":
+        binary_output = render_pdf(payload)
+        output = ""
     else:
         output = render_text(records, warning, errors)
         if not output:
@@ -673,7 +775,10 @@ def main() -> int:
     if args.output:
         destination = Path(args.output).expanduser()
         try:
-            destination.write_text(output + "\n", encoding="utf-8")
+            if binary_output is not None:
+                destination.write_bytes(binary_output)
+            else:
+                destination.write_text(output + "\n", encoding="utf-8")
         except OSError as exc:
             print(f"No se pudo guardar {destination}: {exc}", file=sys.stderr)
             return 2

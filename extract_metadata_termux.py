@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 CORE = Path(__file__).with_name("extract_metadata.py")
@@ -334,35 +335,40 @@ def main() -> int:
             print("No hay archivos para analizar.")
             return 1
 
-        report_path = ask("Ruta opcional para guardar el informe JSON (Enter para mostrarlo aquí): ")
+        print("Formato de informe:")
+        print("1) JSON  2) HTML  3) PDF  4) Texto")
+        format_choice = ask("Elige formato [1]: ") or "1"
+        formats = {"1": ("json", "json"), "2": ("html", "html"), "3": ("pdf", "pdf"), "4": ("text", "txt")}
+        if format_choice not in formats:
+            print("Formato no válido.")
+            return 2
+        output_format, extension = formats[format_choice]
+        default_path = Path.cwd() / f"informe_forense_{time.strftime('%Y%m%d_%H%M%S')}.{extension}"
+        report_path = ask(f"Ruta para guardar el informe [{default_path}]: ")
+        destination = Path(report_path).expanduser() if report_path else default_path
+        if not destination.parent.exists():
+            print(f"No existe la carpeta del informe: {destination.parent}")
+            return 2
         embedded = yes(ask("¿Intentar leer metadatos incrustados con ExifTool, si está instalado? [s/N]: "))
         if embedded and not shutil.which("exiftool"):
             print("ExifTool no está instalado. Puedes elegir la opción 5 del menú o ejecutar install_exiftool_termux.sh.")
         print(f"Iniciando revisión de {len(files)} archivo(s); el avance aparecerá debajo.")
-        command = [sys.executable, str(CORE), "--forense", "--json", "--progress"]
+        command = [sys.executable, str(CORE), "--forense", "--format", output_format, "--progress"]
         if not embedded:
             command.append("--sin-incrustados")
         if rules_path:
             command.extend(["--rules", rules_path])
-        if report_path:
-            destination = Path(report_path).expanduser()
-            if not destination.parent.exists():
-                print(f"No existe la carpeta del informe: {destination.parent}")
-                return 2
-            command.extend(["--output", str(destination)])
+        command.extend(["--output", str(destination)])
         command.extend(str(path) for path in files)
         # stderr se hereda para que las barras y el spinner se vean en tiempo real.
         result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=False)
-        if report_path:
-            print(f"Informe guardado en: {Path(report_path).expanduser()}")
-            return result.returncode
-        try:
-            report = json.loads(result.stdout)
-            print(json.dumps(report, ensure_ascii=False, indent=2))
-        except json.JSONDecodeError:
-            print(result.stdout, end="")
-            print("No se pudo interpretar la salida JSON del analizador.", file=sys.stderr)
-            return 2
+        if destination.is_file():
+            print(f"Informe {output_format.upper()} guardado en: {destination} ({destination.stat().st_size} bytes)")
+        else:
+            print(f"No se generó el informe esperado: {destination}", file=sys.stderr)
+            if result.stdout:
+                print(result.stdout, end="")
+            return result.returncode or 2
         return result.returncode
 
 

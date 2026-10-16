@@ -31,6 +31,8 @@ bash review_termux.sh
 
 El asistente tiene una opción para instalar/verificar ExifTool. También admite el selector `termux-storage-get`, exploración de carpetas accesibles, rutas manuales y `termux-setup-storage`. Este último prepara accesos bajo `~/storage/` y puede mostrar un diálogo de permisos Android; la decisión del permiso se toma en el dispositivo. La exploración recursiva no sigue enlaces de directorio y está limitada a 8 niveles y 5.000 archivos; se muestran como máximo 200 entradas y se pueden revisar hasta 200 por ejecución.
 
+Al terminar la selección, el asistente permite guardar el informe en **JSON, HTML, PDF o texto**. Si aceptas la ruta sugerida, los archivos se guardan en el directorio actual con un nombre `informe_forense_...`.
+
 ## Revisión desde la terminal
 
 Pasa archivos o carpetas al wrapper; este invoca `extract_metadata.py` en modo forense. Si ExifTool no está en `PATH`, informa cómo instalarlo y continúa omitiendo metadata incrustada:
@@ -39,9 +41,12 @@ Pasa archivos o carpetas al wrapper; este invoca `extract_metadata.py` en modo f
 bash review_termux.sh ~/storage/shared/Download/foto.jpg
 bash review_termux.sh --json --rules examples/advanced_script_rules.json ~/storage/shared/Download/script.py
 bash review_termux.sh -r -o informe.json ~/storage/shared/Download
+bash review_termux.sh --format html -o informe.html ~/storage/shared/Download/foto.jpg
+bash review_termux.sh --format pdf -o informe.pdf ~/storage/shared/Download/foto.jpg
+python extract_metadata.py --forense --format pdf -o informe.pdf muestra.exe
 ```
 
-El asistente y el wrapper muestran barras de avance por fase y un indicador durante la lectura de metadata con ExifTool. El progreso va por `stderr`, así que la salida JSON permanece válida.
+Los formatos de CLI son `text`, `json`, `html` y `pdf`; `--json` sigue disponible como alias de compatibilidad. PDF requiere `-o/--output`. HTML es un archivo autocontenido. El generador PDF usa solo Python estándar, sin instalar conversores; los caracteres que no pertenezcan a Windows-1252 pueden aparecer como `?` en ese formato. El asistente y el wrapper muestran barras de avance por fase y un indicador durante la lectura de metadata con ExifTool; el progreso va por `stderr`, así que la salida JSON permanece válida.
 
 Sin argumentos, `review_termux.sh` abre el asistente guiado. ExifTool sirve para leer/escribir metadata en muchos formatos y se distribuye como herramienta Perl; el paquete de Termux integra esa dependencia [1] [3].
 
