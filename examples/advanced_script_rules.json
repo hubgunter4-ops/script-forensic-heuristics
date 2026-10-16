@@ -1,0 +1,108 @@
+{
+  "rules": [
+    {
+      "id": "python_decode_then_execute",
+      "description": "Revisar ejecución dinámica de contenido decodificado o descomprimido.",
+      "severity": "high",
+      "extensions": [".py"],
+      "flags": "i",
+      "pattern": "\\b(?:exec|eval)\\s*\\(\\s*(?:base64\\.(?:b64decode|urlsafe_b64decode)|binascii\\.a2b_base64|zlib\\.decompress|lzma\\.decompress|marshal\\.loads)\\s*\\("
+    },
+    {
+      "id": "python_compile_exec_mode",
+      "description": "Compilación de código Python en modo exec; revisar la procedencia del texto compilado.",
+      "severity": "medium",
+      "extensions": [".py"],
+      "flags": "i",
+      "pattern": "\\bcompile\\s*\\([^,\\n]{1,180},\\s*[^,\\n]{1,120},\\s*['\"]exec['\"]\\s*\\)"
+    },
+    {
+      "id": "python_subprocess_shell_true",
+      "description": "Llamada a subprocess con shell=True, especialmente sensible si los argumentos vienen de entrada externa.",
+      "severity": "high",
+      "extensions": [".py"],
+      "flags": "i",
+      "pattern": "\\bsubprocess\\.(?:Popen|run|call|check_output)\\s*\\([^\\n]{0,240}\\bshell\\s*=\\s*True\\b"
+    },
+    {
+      "id": "python_outbound_http",
+      "description": "Envío o apertura de solicitudes HTTP; comprobar destino y datos transmitidos.",
+      "severity": "medium",
+      "extensions": [".py"],
+      "flags": "i",
+      "pattern": "\\b(?:requests\\.(?:post|put)|httpx\\.(?:post|put)|urllib\\.request\\.urlopen)\\s*\\("
+    },
+    {
+      "id": "python_sensitive_store_access",
+      "description": "Acceso a variables de entorno, almacenes de credenciales, cookies o bases de datos locales.",
+      "severity": "medium",
+      "extensions": [".py"],
+      "flags": "i",
+      "pattern": "\\b(?:os\\.environ(?:\\.get)?|keyring\\.get_password|browser_cookie3|sqlite3\\.connect)\\b"
+    },
+    {
+      "id": "shell_download_pipe_to_interpreter",
+      "description": "Descarga con wget/curl canalizada directamente a sh o bash.",
+      "severity": "critical",
+      "extensions": [".sh", ".bash", ".zsh"],
+      "flags": "i",
+      "pattern": "\\b(?:wget|curl)\\b[^\\n]{0,200}\\|\\s*(?:sh|bash)\\b"
+    },
+    {
+      "id": "wget_write_to_temporary_directory",
+      "description": "wget guarda contenido ejecutable o temporal en una ubicación usada habitualmente para payloads; revisar la línea siguiente y el contexto.",
+      "severity": "high",
+      "extensions": [".sh", ".bash", ".zsh"],
+      "flags": "i",
+      "pattern": "\\bwget\\b[^\\n]{0,200}(?:-O|--output-document(?:=|\\s+))\\s*(?:/tmp/|/var/tmp/|/dev/shm/)"
+    },
+    {
+      "id": "wget_post_data_or_file",
+      "description": "wget transmite datos mediante opciones POST; revisar posible exfiltración o automatización legítima.",
+      "severity": "high",
+      "extensions": [".sh", ".bash", ".zsh"],
+      "flags": "i",
+      "pattern": "\\bwget\\b[^\\n]{0,200}--post-(?:data|file)\\b"
+    },
+    {
+      "id": "shell_reverse_connection_indicators",
+      "description": "Indicadores de conexión inversa o ejecución remota con /dev/tcp, netcat o socat.",
+      "severity": "critical",
+      "extensions": [".sh", ".bash", ".zsh"],
+      "flags": "i",
+      "pattern": "(?:/dev/tcp/[^ \\n]+|\\bnc(?:at)?\\b[^\\n]{0,160}(?:-e|-c)\\b|\\bsocat\\b[^\\n]{0,160}EXEC:)"
+    },
+    {
+      "id": "shell_persistence_changes",
+      "description": "Cambios de persistencia mediante cron, systemd o claves SSH autorizadas.",
+      "severity": "high",
+      "extensions": [".sh", ".bash", ".zsh"],
+      "flags": "i",
+      "pattern": "(?:\\bcrontab\\b[^\\n]{0,120}(?:-e|-l)|\\bsystemctl\\s+enable\\b|\\.ssh/authorized_keys|\\bupdate-rc\\.d\\b)"
+    },
+    {
+      "id": "ruby_decoded_dynamic_eval",
+      "description": "Evaluación Ruby de cadenas decodificadas o descomprimidas; revisar el origen del contenido.",
+      "severity": "high",
+      "extensions": [".rb"],
+      "flags": "i",
+      "pattern": "\\b(?:eval|instance_eval|class_eval|module_eval)\\s*\\(?\\s*(?:Base64\\.(?:decode64|urlsafe_decode64)|Zlib\\.inflate)\\b"
+    },
+    {
+      "id": "ruby_process_launch",
+      "description": "Lanzamiento de procesos o comandos desde Ruby; verificar argumentos y fuente de datos.",
+      "severity": "high",
+      "extensions": [".rb"],
+      "flags": "i",
+      "pattern": "\\b(?:system|exec|spawn|IO\\.popen|Open3\\.(?:capture2|capture3))\\s*(?:\\(|\\s+['\"])"
+    },
+    {
+      "id": "ruby_network_request",
+      "description": "Acceso de red desde Ruby; revisar si descarga y luego ejecuta contenido.",
+      "severity": "medium",
+      "extensions": [".rb"],
+      "flags": "i",
+      "pattern": "\\b(?:Net::HTTP\\.(?:get|post|start)|URI\\.open|OpenURI\\.open_uri)\\b"
+    }
+  ]
+}
