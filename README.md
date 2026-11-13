@@ -5,6 +5,7 @@ Herramienta de línea de comandos y reglas heurísticas para revisar scripts Pyt
 ## Archivos
 
 - `extract_metadata.py`: analizador principal de metadatos y formatos.
+- `flow_analysis.py`: reconstrucción de flujos en Python (asignaciones y concatenaciones entre líneas, llamadas a funciones y taint desde fuentes hasta sumideros) y decodificación de ofuscación en capas (máx. 3); se integra en el análisis forense de `extract_metadata.py` como sección `flujos`.
 - `extract_metadata_termux.py`: asistente con explorador de rutas, selector Android y configuración de almacenamiento.
 - `review_termux.sh`: revisión rápida desde la terminal; sin argumentos abre el asistente y con rutas lanza el análisis.
 - `install_exiftool_termux.sh`: instala/verifica ExifTool usando los repositorios de Termux.
@@ -81,7 +82,7 @@ Son candidatos para futuras integraciones, no dependencias de esta versión. Ant
 
 ## Alcance y limitaciones
 
-Las reglas se evalúan línea por línea; no reconstruyen flujos entre varias líneas ni detectan toda ofuscación. Una regla puede dar falsos positivos, y no encontrar coincidencias no certifica que un archivo sea seguro. Revisa el contexto, URLs, permisos, destinos y origen antes de concluir.
+Las reglas heurísticas se evalúan línea por línea. Para Python, el análisis forense añade además la sección `flujos` (`flow_analysis.py`): reconstruye asignaciones y concatenaciones entre líneas, sigue datos desde fuentes (`input`, `sys.argv`, lectura de archivos, entorno) hasta sumideros (`eval`, `exec`, `os.system`, `subprocess`, escritura) y decodifica ofuscación en capas (base64, hex, `chr()`, escapes unicode, rot13, cadenas invertidas, `+`/`join`, máx. 3 capas). La decodificación de otros lenguajes y de ofuscación más compleja sigue sin cubrirse. Una regla o un flujo puede dar falsos positivos, y no encontrar coincidencias no certifica que un archivo sea seguro. Revisa el contexto, URLs, permisos, destinos y origen antes de concluir.
 
 ## Referencias
 

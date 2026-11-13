@@ -24,6 +24,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+try:
+    from flow_analysis import analyze_flows
+except ImportError:  # el módulo de flujos es opcional; el análisis por línea sigue
+    analyze_flows = None
+
 DEFAULT_YARA_RULES = Path(__file__).with_name("examples") / "advanced_static_triage.yar"
 
 
@@ -435,6 +440,11 @@ def _script_analysis(path: Path, custom_rules: list[dict[str, Any]] | None = Non
             result["parseo_sintactico"] = "correcto"
         except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
             result["parseo_sintactico"] = f"no completado: {type(exc).__name__}: {exc}"
+        if analyze_flows is not None:
+            try:
+                result["flujos"] = analyze_flows(text, path.name)
+            except Exception as exc:  # el análisis de flujos nunca debe romper el triage
+                result["flujos"] = {"flujos": [], "resumen": {"flujos": 0, "con_fuente": 0, "con_decodificacion": 0}, "error": str(exc)}
     else:
         checks = {
             "descarga_y_ejecucion_en_cadena": r"(?i)(?:curl|wget|Invoke-WebRequest|DownloadString|Start-BitsTransfer).{0,180}(?:\|\s*(?:sh|bash)|IEX|Invoke-Expression|\bsh\b|\bbash\b)",
